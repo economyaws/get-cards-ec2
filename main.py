@@ -87,7 +87,7 @@ async def get_data_endpoint(request: EmailRequest):
         else:
             raise HTTPException(status_code=404, detail="Deals not found")
 
-if _name_ == "_main_":
+if __name__ == "__main__":
     import nest_asyncio
     nest_asyncio.apply()
     asyncio.run(app())
