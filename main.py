@@ -2,18 +2,13 @@ import asyncio
 import aiohttp
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
-from starlette.middleware.cors import CORSMiddleware
+from starlette.middleware.cors import CORSMiddleware  
 
 app = FastAPI()
 
-origins = [
-    "http://localhost",  
-    "https://www.paineleconomyenergy.com.br", 
-]
-
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=origins,  # Permite as origens definidas acima
+    allow_origins=["*"],  # Permite requisições de qualquer origem
     allow_credentials=True,
     allow_methods=["*"],  # Permite todos os métodos HTTP (GET, POST, etc)
     allow_headers=["*"],  # Permite todos os cabeçalhos
@@ -101,7 +96,7 @@ async def get_data_endpoint(request: EmailRequest):
         else:
             raise HTTPException(status_code=404, detail="Deals not found")
 
-if __name__ == "_main_":
+if __name__ == "__main__":
     import nest_asyncio
     nest_asyncio.apply()
     asyncio.run(app())
