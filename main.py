@@ -2,12 +2,26 @@ import asyncio
 import aiohttp
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
+from starlette.middleware.cors import CORSMiddleware
 
 app = FastAPI()
 
-token_id = 'mz71n43h67yp3fni'  # Seu token de acesso  
+origins = [
+    "http://localhost",  
+    "https://www.paineleconomyenergy.com.br", 
+]
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=origins,  # Permite as origens definidas acima
+    allow_credentials=True,
+    allow_methods=["*"],  # Permite todos os métodos HTTP (GET, POST, etc)
+    allow_headers=["*"],  # Permite todos os cabeçalhos
+)
+
+token_id = 'mz71n43h67yp3fni'  # Seu token de acesso   
 host = 'economyenergy.bitrix24.com.br'  # O host do seu Bitrix24
-user = 1  # ID do usuario
+user = 1  # ID do usuário
 
 class EmailRequest(BaseModel):
     email: str
@@ -87,7 +101,7 @@ async def get_data_endpoint(request: EmailRequest):
         else:
             raise HTTPException(status_code=404, detail="Deals not found")
 
-if __name__ == "_main_":
+if _name_ == "_main_":
     import nest_asyncio
     nest_asyncio.apply()
     asyncio.run(app())
