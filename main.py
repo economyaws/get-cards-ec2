@@ -2,21 +2,12 @@ import asyncio
 import aiohttp
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
-from starlette.middleware.cors import CORSMiddleware  
 
 app = FastAPI()
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],  # Permite requisições de qualquer origem
-    allow_credentials=True,
-    allow_methods=["*"],  # Permite todos os métodos HTTP (GET, POST, etc)
-    allow_headers=["*"],  # Permite todos os cabeçalhos
-)
-
-token_id = 'mz71n43h67yp3fni'  # Seu token de acesso   
+token_id = 'mz71n43h67yp3fni'  # Seu token de acesso  
 host = 'economyenergy.bitrix24.com.br'  # O host do seu Bitrix24
-user = 1  # ID do usuário
+user = 1  # ID do usuario
 
 class EmailRequest(BaseModel):
     email: str
