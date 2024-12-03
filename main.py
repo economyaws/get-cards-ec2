@@ -20,15 +20,21 @@ host = 'economyenergy.bitrix24.com.br'  # O host do seu Bitrix24
 user = 1  # ID do usuário
 
 semaphore = Semaphore(5)  # Limita a 5 conexões simultâneas
+timeout = aiohttp.ClientTimeout(total=30)  # Definindo timeout para 30 segundos
 
 class EmailRequest(BaseModel):
     email: str
 
 async def fetch(session, url, params):
     async with semaphore:
-        async with session.post(url, json=params) as response:
-            response.raise_for_status()
-            return await response.json()
+        try:
+            async with session.post(url, json=params, timeout=timeout) as response:
+                response.raise_for_status()
+                return await response.json()
+        except asyncio.TimeoutError:
+            raise HTTPException(status_code=408, detail="Request Timeout")
+        except aiohttp.ClientError as e:
+            raise HTTPException(status_code=500, detail=f"Client Error: {str(e)}")
 
 async def get_leads(session, email_filter, last_id=None):
     url = f'https://{host}/rest/{user}/{token_id}/crm.lead.list/'
@@ -102,7 +108,7 @@ async def get_data(session, email_filter):
 
 @app.post("/get_data")
 async def get_data_endpoint(request: EmailRequest):
-    async with aiohttp.ClientSession() as session:
+    async with aiohttp.ClientSession(timeout=timeout) as session:
         email_filter = request.email
         
         # Obter leads e deals simultaneamente
