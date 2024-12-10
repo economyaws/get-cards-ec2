@@ -1,146 +1,201 @@
 import asyncio
 import aiohttp
+import logging
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from starlette.middleware.cors import CORSMiddleware
 from asyncio import Semaphore
+import random
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 app = FastAPI()
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Permite requisições de qualquer origem
+    allow_origins=["*"],
     allow_credentials=True,
-    allow_methods=["*"],  # Permite todos os métodos HTTP (GET, POST, etc)
-    allow_headers=["*"],  # Permite todos os cabeçalhos
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
-token_id = 'mz71n43h67yp3fni'  # Seu token de acesso    
-host = 'economyenergy.bitrix24.com.br'  # O host do seu Bitrix24
-user = 1  # ID do usuário
+# Configuration
+token_id = 'mz71n43h67yp3fni'
+host = 'economyenergy.bitrix24.com.br'
+user = 1
 
-semaphore = Semaphore(5)  # Limita a 5 conexões simultâneas
-timeout = aiohttp.ClientTimeout(total=30)  # Definindo timeout para 30 segundos
+# Increased semaphore for more concurrent requests
+semaphore = Semaphore(50)  # Increased concurrency
+timeout = aiohttp.ClientTimeout(total=10)  # Reduced timeout to 10 seconds
 
 class EmailRequest(BaseModel):
     email: str
 
-async def fetch(session, url, params):
-    async with semaphore:
+async def fetch_with_retry(session, url, params, retries=3):
+    """
+    Fetch data with retries and exponential backoff in case of failure
+    """
+    for attempt in range(retries):
         try:
             async with session.post(url, json=params, timeout=timeout) as response:
                 response.raise_for_status()
                 return await response.json()
-        except asyncio.TimeoutError:
-            raise HTTPException(status_code=408, detail="Request Timeout")
-        except aiohttp.ClientError as e:
-            raise HTTPException(status_code=500, detail=f"Client Error: {str(e)}")
+        except (aiohttp.ClientError, asyncio.TimeoutError) as e:
+            if attempt < retries - 1:
+                delay = 2 ** attempt + random.uniform(0, 1)  # Exponential backoff
+                await asyncio.sleep(delay)
+            else:
+                logger.error(f"Error fetching data after {retries} retries: {e}")
+                raise e
 
-async def get_leads(session, email_filter, last_id=None):
-    url = f'https://{host}/rest/{user}/{token_id}/crm.lead.list/'
-    params = {
-        'order': {'DATE_CREATE': 'DESC'},
-        'filter': {'UF_CRM_1717008267006': email_filter},
-        'select': ['ID', 'OPPORTUNITY', 'STATUS_ID', 'UF_CRM_1717008267006', 'TITLE', 'DATE_CREATE', 'CONTACT_ID', 'PHONE', 'UF_CRM_1717008267006', 'UF_CRM_1716238809742', 'UF_CRM_1721931621996'],
-        'start': last_id if last_id else 0,  # Início a partir do último ID
-        'limit': 50  # Paginação de 50 resultados por vez
-    }
+async def fetch_all_items_optimized(session, url, params, item_type=''):
+    """
+    Optimized function to fetch ALL items from Bitrix24 API using ID-based pagination
+    """
+    all_items = []
+    last_id = 0
+    batch_size = 50  # Bitrix24 recommended batch size
+    total_retrieved = 0
 
-    all_leads = []
+    # Modify params to use ID-based pagination
+    base_params = params.copy()
+    base_params['order'] = {'ID': 'ASC'}
+    base_params['start'] = -1  # Disable count request for performance
+
     while True:
-        response = await fetch(session, url, params)
-        if 'result' in response:
-            all_leads.extend(response['result'])
-        
-        # Verificar se há mais resultados para buscar
-        if 'next' in response:
-            params['start'] = response['next']
-        else:
-            break
-    
-    return {'result': all_leads}
+        # Update filter to get items after the last retrieved ID
+        current_params = base_params.copy()
+        current_params['filter'] = current_params.get('filter', {})
+        current_params['filter']['>ID'] = last_id
 
-async def get_deals(session, email_filter, last_id=None):
-    url = f'https://{host}/rest/{user}/{token_id}/crm.deal.list/'
+        async with semaphore:
+            try:
+                data = await fetch_with_retry(session, url, current_params)
+                
+                if 'result' not in data or not data['result']:
+                    logger.info(f"No more {item_type} items to retrieve.")
+                    break
+
+                # Add batch of items
+                batch_items = data['result']
+                all_items.extend(batch_items)
+                total_retrieved += len(batch_items)
+
+                # Log progress
+                logger.info(f"Retrieved {total_retrieved} {item_type} items so far...")
+
+                # Update last_id with the ID of the last item
+                if batch_items:
+                    last_id = max(item['ID'] for item in batch_items)
+
+                # Stop condition: fewer items than batch size
+                if len(batch_items) < batch_size:
+                    logger.info(f"Finished retrieving {item_type} items. Total: {total_retrieved}")
+                    break
+
+            except Exception as e:
+                logger.error(f"Error fetching {item_type} items: {e}")
+                break
+
+    return all_items
+
+async def bulk_get_contact_phones(session, contact_ids):
+    """
+    Fetch contact phones in bulk to reduce API calls
+    """
+    if not contact_ids:
+        return {}
+    
+    url = f'https://{host}/rest/{user}/{token_id}/crm.contact.list'
+    
     params = {
-        'order': {'DATE_CREATE': 'DESC'},
-        'filter': {'UF_CRM_6657792586A0F': email_filter},
-        'select': ['PHONE', 'CATEGORY_ID', 'OPPORTUNITY', 'STAGE_ID', 'UF_CRM_6657792586A0F', 'TITLE', 'DATE_CREATE', 'CONTACT_ID', 'UF_CRM_1716235306165', 'UF_CRM_1709207938786', 'UF_CRM_664BBA75E0765', 'UF_CRM_1709060681601', 'UF_CRM_1716236663328', 'UF_CRM_1716235986482'],
-        'start': last_id if last_id else 0,  # Início a partir do último ID
-        'limit': 50  # Paginação de 50 resultados por vez
+        'filter': {'ID': contact_ids},
+        'select': ['ID', 'PHONE'],
+        'start': -1  # Optimize pagination
     }
-
-    all_deals = []
-    while True:
-        response = await fetch(session, url, params)
-        if 'result' in response:
-            all_deals.extend(response['result'])
+    
+    try:
+        response_data = await fetch_all_items_optimized(session, url, params, item_type='contacts')
         
-        # Verificar se há mais resultados para buscar
-        if 'next' in response:
-            params['start'] = response['next']
-        else:
-            break
+        # Create a mapping of contact_id to phone
+        contact_phones = {
+            str(contact['ID']): 
+            (contact['PHONE'][0]['VALUE'] if contact.get('PHONE') and len(contact['PHONE']) > 0 else None)
+            for contact in response_data
+        }
+        
+        return contact_phones
     
-    return {'result': all_deals}
-
-async def get_contact_phone(session, contact_id):
-    if not contact_id:
-        return None
-    url = f'https://{host}/rest/{user}/{token_id}/crm.contact.get.json'
-    params = {'id': contact_id}
-    response = await fetch(session, url, params)
-    return response.get('result', {}).get('PHONE', [])
-
-async def get_phones_for_deals(session, deals):
-    contact_ids = [deal['CONTACT_ID'] for deal in deals if deal.get('CONTACT_ID')]
-    phone_tasks = [get_contact_phone(session, contact_id) for contact_id in contact_ids]
-    phones = await asyncio.gather(*phone_tasks)
-    
-    for deal, phone in zip(deals, phones):
-        deal['PHONE'] = phone[0]['VALUE'] if phone else None
-    return deals
-
-async def get_data(session, email_filter):
-    leads_task = get_leads(session, email_filter)
-    deals_task = get_deals(session, email_filter)
-    return await asyncio.gather(leads_task, deals_task)
+    except Exception as e:
+        logger.error(f"Error fetching contact phones in bulk: {e}")
+        return {}
 
 @app.post("/get_data")
 async def get_data_endpoint(request: EmailRequest):
     async with aiohttp.ClientSession(timeout=timeout) as session:
         email_filter = request.email
         
-        # Obter leads e deals simultaneamente
-        leads, deals = await get_data(session, email_filter)
+        try:
+            # Prepare URLs and parameters
+            leads_url = f'https://{host}/rest/{user}/{token_id}/crm.lead.list/'
+            deals_url = f'https://{host}/rest/{user}/{token_id}/crm.deal.list/'
+            
+            leads_params = {
+                'filter': {'UF_CRM_1717008267006': email_filter},
+                'select': ['ID', 'OPPORTUNITY', 'STATUS_ID', 'UF_CRM_1717008267006', 'TITLE', 'DATE_CREATE', 'CONTACT_ID', 'PHONE', 'UF_CRM_1717008267006', 'UF_CRM_1716238809742', 'UF_CRM_1721931621996']
+            }
+            
+            deals_params = {
+                'filter': {'UF_CRM_6657792586A0F': email_filter},
+                'select': ['PHONE', 'CATEGORY_ID', 'OPPORTUNITY', 'STAGE_ID', 'UF_CRM_6657792586A0F', 'TITLE', 'DATE_CREATE', 'CONTACT_ID', 'UF_CRM_1716235306165', 'UF_CRM_1709207938786', 'UF_CRM_664BBA75E0765', 'UF_CRM_1709060681601', 'UF_CRM_1716236663328', 'UF_CRM_1716235986482']
+            }
+            
+            # Fetch leads and deals concurrently
+            leads_task = asyncio.create_task(fetch_all_items_optimized(session, leads_url, leads_params, item_type='leads'))
+            deals_task = asyncio.create_task(fetch_all_items_optimized(session, deals_url, deals_params, item_type='deals'))
+            
+            leads, deals = await asyncio.gather(leads_task, deals_task)
+            
+            # Collect unique contact IDs from both leads and deals
+            contact_ids = list(set(
+                [str(lead.get('CONTACT_ID', '')) for lead in leads if lead.get('CONTACT_ID')] +
+                [str(deal.get('CONTACT_ID', '')) for deal in deals if deal.get('CONTACT_ID')]
+            ))
+            
+            # Fetch contact phones in bulk
+            contact_phones = await bulk_get_contact_phones(session, contact_ids)
+            
+            # Process leads and add phone numbers
+            for lead in leads:
+                contact_id = str(lead.get('CONTACT_ID', ''))
+                lead['PHONE'] = contact_phones.get(contact_id)
+                lead['DATA_TYPE'] = 'LEAD'
+            
+            # Process deals and add phone numbers
+            for deal in deals:
+                contact_id = str(deal.get('CONTACT_ID', ''))
+                deal['PHONE'] = contact_phones.get(contact_id)
+                deal['DATA_TYPE'] = 'DEAL'
+            
+            # Combine leads and deals
+            all_data = leads + deals
+            
+            logger.info(f"Total data retrieved: {len(all_data)} items")
+            logger.info(f"Leads: {len(leads)}, Deals: {len(deals)}")
+            
+            return {
+                "data": all_data, 
+                "total_count": len(all_data), 
+                "leads_count": len(leads), 
+                "deals_count": len(deals), 
+                "statusbody": 200
+            }
+        
+        except Exception as e:
+            logger.error(f"Error processing data for email {email_filter}: {e}")
+            raise HTTPException(status_code=500, detail=f"Internal Server Error: {str(e)}")
 
-        all_data = []
-
-        # Processar leads
-        if leads and 'result' in leads:
-            result_leads = leads['result']
-            for lead in result_leads:
-                if 'PHONE' in lead and isinstance(lead['PHONE'], list) and len(lead['PHONE']) > 0:
-                    lead['PHONE'] = lead['PHONE'][0]['VALUE']
-                else:
-                    lead['PHONE'] = None
-                all_data.append(lead)
-        else:
-            raise HTTPException(status_code=404, detail="Leads not found")
-
-        # Processar deals
-        if deals and 'result' in deals:
-            result_deals = deals['result']
-            result_deals = await get_phones_for_deals(session, result_deals)
-
-            for deal in result_deals:
-                all_data.append(deal)
-
-            return {"data": all_data, "statusbody": 200}
-        else:
-            raise HTTPException(status_code=404, detail="Deals not found")
-
-if __name__ == "_main_":
+if __name__ == "__main__":
     import nest_asyncio
     nest_asyncio.apply()
-    asyncio.run(app())
