@@ -154,7 +154,7 @@ async def get_data_endpoint(request: EmailRequest):
             
             deals_usina_params = {
                 'filter': {'UF_CRM_1726088862520': email_filter},
-                'select': ['TITLE', 'DATE_CREATE', 'CONTACT_ID', 'OPPORTUNITY', 'STAGE_ID', 'CATEGORY_ID', 'UF_CRM_1726088862520', 'UF_CRM_1726089384094', 'UF_CRM_1726089371430', 'UF_CRM_1726089284839']
+                'select': ['TITLE', 'DATE_CREATE', 'CONTACT_ID', 'OPPORTUNITY', 'STAGE_ID', 'CATEGORY_ID', 'UF_CRM_1726088862520', 'UF_CRM_1726089384094', 'UF_CRM_1726089371430', 'UF_CRM_1726089284839', 'UF_CRM_1726089103186']
             }
             
             # Fetch leads and deals concurrently
