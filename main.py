@@ -129,6 +129,18 @@ async def bulk_get_contact_phones(session, contact_ids):
     except Exception as e:
         logger.error(f"Error fetching contact phones in bulk: {str(e)}")
         return {}
+    
+def deduplicate_items(items, id_field='ID'):
+    """
+    Remove duplicate items based on ID field
+    """
+    unique_items = {}
+    for item in items:
+        item_id = item.get(id_field)
+        if item_id and item_id not in unique_items:
+            unique_items[item_id] = item
+    
+    return list(unique_items.values())
 
 @app.post("/get_data")
 async def get_data_endpoint(request: EmailRequest):
@@ -186,50 +198,55 @@ async def get_data_endpoint(request: EmailRequest):
                 [] if isinstance(r, Exception) else r for r in results
             ]
 
-            # Log individual counts
-            logger.info(f"Leads 1 count: {len(leads_1)}")
-            logger.info(f"Leads 2 count: {len(leads_2)}")
-            logger.info(f"Deals 1 count: {len(deals_1)}")
-            logger.info(f"Deals 2 count: {len(deals_2)}")
-            logger.info(f"Deals Usina count: {len(deals_usina)}")
+            # Combine and deduplicate leads
+            all_leads = leads_1 + leads_2
+            deduplicated_leads = deduplicate_items(all_leads, 'ID')
+            logger.info(f"Leads before deduplication: {len(all_leads)}, after: {len(deduplicated_leads)}")
+            
+            # Combine and deduplicate deals
+            all_deals = deals_1 + deals_2
+            deduplicated_deals = deduplicate_items(all_deals, 'ID')
+            logger.info(f"Deals before deduplication: {len(all_deals)}, after: {len(deduplicated_deals)}")
+            
+            # Deduplicate usina deals
+            deduplicated_deals_usina = deduplicate_items(deals_usina, 'ID')
             
             # Collect unique contact IDs
             contact_ids = list(set(
-                [str(lead.get('CONTACT_ID', '')) for lead in leads_1 + leads_2 if lead.get('CONTACT_ID')] +
-                [str(deal.get('CONTACT_ID', '')) for deal in deals_1 + deals_2 if deal.get('CONTACT_ID')] +
-                [str(item.get('CONTACT_ID', '')) for item in deals_usina if item.get('CONTACT_ID')]
+                [str(lead.get('CONTACT_ID', '')) for lead in deduplicated_leads if lead.get('CONTACT_ID')] +
+                [str(deal.get('CONTACT_ID', '')) for deal in deduplicated_deals if deal.get('CONTACT_ID')] +
+                [str(item.get('CONTACT_ID', '')) for item in deduplicated_deals_usina if item.get('CONTACT_ID')]
             ))
             
             contact_phones = await bulk_get_contact_phones(session, contact_ids)
             
             # Process all items and add phone numbers
-            for item in leads_1 + leads_2:
+            for item in deduplicated_leads:
                 contact_id = str(item.get('CONTACT_ID', ''))
                 item['PHONE'] = contact_phones.get(contact_id)
                 item['DATA_TYPE'] = 'LEAD'
             
-            for item in deals_1 + deals_2:
+            for item in deduplicated_deals:
                 contact_id = str(item.get('CONTACT_ID', ''))
                 item['PHONE'] = contact_phones.get(contact_id)
                 item['DATA_TYPE'] = 'DEAL'
             
-            for item in deals_usina:
+            for item in deduplicated_deals_usina:
                 contact_id = str(item.get('CONTACT_ID', ''))
                 item['PHONE'] = contact_phones.get(contact_id)
                 item['DATA_TYPE'] = 'DEALS_USINA'
             
-            all_data = leads_1 + leads_2 + deals_1 + deals_2 + deals_usina
+            all_data = deduplicated_leads + deduplicated_deals + deduplicated_deals_usina
             
             response_data = {
                 "data": all_data,
                 "total_count": len(all_data),
-                "leads_count": len(leads_1 + leads_2),
-                "deals_count": len(deals_1 + deals_2),
-                "deals_usina_count": len(deals_usina),
+                "leads_count": len(deduplicated_leads),
+                "deals_count": len(deduplicated_deals),
+                "deals_usina_count": len(deduplicated_deals_usina),
                 "statusbody": 200
             }
             
-            logger.info(f"Final response data counts: {response_data}")
             return response_data
         
         except Exception as e:
