@@ -21,9 +21,9 @@ app.add_middleware(
 )
 
 # Configuration
-token_id = 'mz71n43h67yp3fni'
+token_id = 'q0lstsb2sl3pp7sd'
 host = 'economyenergy.bitrix24.com.br'
-user = 1
+user = 1487
 
 semaphore = Semaphore(50)
 timeout = aiohttp.ClientTimeout(total=10)
